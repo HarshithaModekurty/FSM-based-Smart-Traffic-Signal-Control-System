@@ -1,93 +1,98 @@
-`timescale 1ns / 1ps
-//////////////////////////////////////////////////////////////////////////////////
-// Company: 
-// Engineer: 
-// 
-// Create Date: 12/18/2024 11:10:00 PM
-// Design Name: 
-// Module Name: tb_trafficFsmCon
-// Project Name: 
-// Target Devices: 
-// Tool Versions: 
-// Description: Testbench for traffic FSM controller with separate light outputs
-// 
-//////////////////////////////////////////////////////////////////////////////////
+`timescale 1ns/1ps
 
-module tb_trafficFsmCon;
+module tb_traffic_fsm;
 
-// Parameters
-parameter N_S = 2'b01, E_W = 2'b10;
+    // Parameters for quick sim
+    localparam MIN_G = 8;
+    localparam MAX_G = 24;
+    localparam ALL_R = 3;
 
-// Inputs
-reg clk;
-reg rst;
-reg cars;
+    // DUT I/O
+    reg  clk;
+    reg  rst;
+    reg  cars_ns;
+    reg  cars_ew;
+    wire green_N, red_N, green_E, red_E;
 
-// Outputs
-wire green_N;
-wire red_N;
-wire green_E;
-wire red_E;
+    // Instantiate DUT
+    traffic_fsm #(
+        .MIN_GREEN_CYCLES(MIN_G),
+        .MAX_GREEN_CYCLES(MAX_G),
+        .ALL_RED_CYCLES  (ALL_R)
+    ) dut (
+        .clk     (clk),
+        .rst     (rst),
+        .cars_ns (cars_ns),
+        .cars_ew (cars_ew),
+        .green_N (green_N),
+        .red_N   (red_N),
+        .green_E (green_E),
+        .red_E   (red_E)
+    );
 
-// Instantiate the Unit Under Test (UUT)
-trafficFsmCon #(.N_S(N_S), .E_W(E_W)) uut (
-    .clk(clk),
-    .rst(rst),
-    .cars(cars),
-    .green_N(green_N),
-    .red_N(red_N),
-    .green_E(green_E),
-    .red_E(red_E)
-);
+    // Clock: 10ns period
+    initial clk = 1'b0;
+    always  #5 clk = ~clk;
 
-// Clock generation
-initial begin
-    clk = 0;
-    forever #5 clk = ~clk; // 10ns clock period
-end
+    // Pretty-print state (peek internal 'state' & 'timer' for visibility)
+    // NOTE: Accessing dut.state/timer is purely for TB display.
+    task show;
+        $display("t=%0t  state=%0d  timer=%0d  cars_ns=%0b cars_ew=%0b  |  N(G,R)=%0b,%0b  E(G,R)=%0b,%0b",
+                 $time, dut.state, dut.timer, cars_ns, cars_ew, green_N, red_N, green_E, red_E);
+    endtask
 
-// Test sequence
-initial begin
-    // Monitor outputs
-    $monitor("Time: %0t | State: %b | Cars: %b | Green_N: %b | Red_N: %b | Green_E: %b | Red_E: %b", 
-             $time, uut.state, cars, green_N, red_N, green_E, red_E);
+    // Drive sequences
+    initial begin
+        // Waveform dump
+        $dumpfile("traffic_fsm.vcd");
+        $dumpvars(0, tb_traffic_fsm);
 
-    // Initialize inputs
-    rst = 1;
-    cars = 0;
-    #10; // Wait for reset
-    rst = 0;
+        // Init
+        rst     = 1'b1;
+        cars_ns = 1'b0;
+        cars_ew = 1'b0;
+        repeat (2) @(posedge clk);
+        rst = 1'b0;
+        repeat (1) @(posedge clk); show();
 
-    // Test Case 1: Stay in N_S (no cars)
-    #10 cars = 0; // No cars detected
-    #20;
+        // 1) Start in NS green (by reset). Let it run MIN_G cycles with no requests.
+        repeat (MIN_G/2) @(posedge clk); show();
 
-    // Test Case 2: Transition to E_W (cars detected in the East/West direction)
-    cars = 1;
-    #20;
+        // 2) Request from EW -> expect: wait until MIN_G, all-red for ALL_R, then EW green
+        cars_ew = 1'b1;
+        repeat (MIN_G) @(posedge clk); show();
 
-    // Test Case 3: Stay in E_W (no cars)
-    cars = 0;
-    #20;
+        // Keep EW request asserted a bit, then drop it
+        repeat (4) @(posedge clk); show();
+        cars_ew = 1'b0;
 
-    // Test Case 4: Transition back to N_S (cars detected in the North/South direction)
-    cars = 1;
-    #20;
+        // 3) No requests; ensure fairness: after MAX_G on EW, it should flip back to NS via all-red
+        repeat (MAX_G + 4) @(posedge clk); show();
 
-    // Test Case 5: Remain in N_S (no cars detected)
-    cars = 0;
-    #20;
+        // 4) Now request from NS side
+        cars_ns = 1'b1;
+        repeat (MIN_G + 4) @(posedge clk); show();
+        cars_ns = 1'b0;
 
-    // Test Case 6: Reset FSM
-    rst = 1;
-    #10 rst = 0;
+        // 5) Staggered requests: both sides ask; observe min green + interlock behavior
+        repeat (5) @(posedge clk); show();
+        cars_ns = 1'b1;
+        cars_ew = 1'b1;
+        repeat (MAX_G + 6) @(posedge clk); show();
+        cars_ns = 1'b0;
+        cars_ew = 1'b0;
 
-    // Test Case 7: Transition back to E_W (cars detected in the East/West direction)
-    cars = 1;
-    #20;
+        // 6) Finish
+        repeat (10) @(posedge clk); show();
+        $display("Simulation complete.");
+        $finish;
+    end
 
-    // Finish simulation
-    $finish;
-end
+    // Continuous monitor (optional)
+    initial begin
+        $monitor("t=%0t  state=%0d  timer=%0d  cars_ns=%0b cars_ew=%0b  |  N(G,R)=%0b,%0b  E(G,R)=%0b,%0b",
+                 $time, dut.state, dut.timer, cars_ns, cars_ew, green_N, red_N, green_E, red_E);
+    end
 
 endmodule
+
